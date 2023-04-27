@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/AxelUser/maelstrom-walkthrough/internal/crdt"
 	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
 )
 
@@ -18,22 +19,43 @@ type syncReq struct {
 }
 
 type gSet struct {
-	n  *maelstrom.Node
-	s  map[int]struct{}
-	mu sync.RWMutex
+	n      *maelstrom.Node
+	s      map[string]*crdt.Accumulator[map[int]struct{}, int]
+	initWG sync.WaitGroup
 }
 
 func createGSet(n *maelstrom.Node) *gSet {
-	return &gSet{
+	s := gSet{
 		n: n,
-		s: map[int]struct{}{},
+		s: map[string]*crdt.Accumulator[map[int]struct{}, int]{},
 	}
+	s.initWG.Add(1)
+	return &s
+}
+
+func (gs *gSet) init() {
+	for _, n := range gs.n.NodeIDs() {
+		gs.s[n] = crdt.CreateAccumulator(map[int]struct{}{}, func(acc map[int]struct{}, new int) map[int]struct{} {
+			acc[new] = struct{}{}
+			return acc
+		}, func(cur map[int]struct{}) map[int]struct{} {
+			cp := map[int]struct{}{}
+			for v, _ := range cur {
+				cp[v] = struct{}{}
+			}
+			return cp
+		})
+	}
+	gs.initWG.Done()
 }
 
 func (gs *gSet) startSync(cd time.Duration) {
 	if gs.n.NodeIDs() == nil {
 		return
 	}
+
+	gs.init()
+
 	go func() {
 		for {
 			els := gs.read()
@@ -49,29 +71,29 @@ func (gs *gSet) startSync(cd time.Duration) {
 }
 
 func (gs *gSet) add(element int) {
-	gs.mu.Lock()
-	gs.s[element] = struct{}{}
-	gs.mu.Unlock()
+	gs.initWG.Wait()
+	gs.s[gs.n.ID()].Add(element)
 }
 
 func (gs *gSet) read() []int {
-	gs.mu.RLock()
-	set := make([]int, len(gs.s))
-	i := 0
-	for el := range gs.s {
-		set[i] = el
-		i++
+	gs.initWG.Wait()
+	set := map[int]struct{}{}
+	ret := make([]int, 0)
+
+	for _, acc := range gs.s {
+		for val, _ := range acc.Get() {
+			if _, ok := set[val]; !ok {
+				set[val] = struct{}{}
+				ret = append(ret, val)
+			}
+		}
 	}
-	gs.mu.RUnlock()
-	return set
+
+	return ret
 }
 
-func (gs *gSet) sync(elements []int) {
-	gs.mu.Lock()
-	for _, el := range elements {
-		gs.s[el] = struct{}{}
-	}
-	gs.mu.Unlock()
+func (gs *gSet) sync(src string, elements []int) {
+	gs.s[src].Merge(elements)
 }
 
 func main() {
@@ -111,7 +133,7 @@ func main() {
 			return err
 		}
 
-		gs.sync(req.Elements)
+		gs.sync(msg.Src, req.Elements)
 		return nil
 	})
 
