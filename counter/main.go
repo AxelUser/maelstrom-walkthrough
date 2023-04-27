@@ -11,45 +11,40 @@ import (
 )
 
 type addReq struct {
-	Element int `json:"element"`
+	Delta int `json:"delta"`
 }
 
 type syncReq struct {
-	Elements []int `json:"elements"`
+	Value int `json:"value"`
 }
 
-type gSet struct {
+type counter struct {
 	n      *maelstrom.Node
-	s      map[string]*crdt.Accumulator[map[int]struct{}, int]
+	s      map[string]*crdt.Accumulator[int, int]
 	initWG sync.WaitGroup
 }
 
-func createGSet(n *maelstrom.Node) *gSet {
-	s := gSet{
+func createCounter(n *maelstrom.Node) *counter {
+	s := counter{
 		n: n,
-		s: map[string]*crdt.Accumulator[map[int]struct{}, int]{},
+		s: map[string]*crdt.Accumulator[int, int]{},
 	}
 	s.initWG.Add(1)
 	return &s
 }
 
-func (gs *gSet) init() {
+func (gs *counter) init() {
 	for _, n := range gs.n.NodeIDs() {
-		gs.s[n] = crdt.CreateAccumulator(map[int]struct{}{}, func(acc map[int]struct{}, new int) map[int]struct{} {
-			acc[new] = struct{}{}
-			return acc
-		}, func(cur map[int]struct{}) map[int]struct{} {
-			cp := map[int]struct{}{}
-			for v := range cur {
-				cp[v] = struct{}{}
-			}
-			return cp
+		gs.s[n] = crdt.CreateAccumulator(0, func(acc int, new int) int {
+			return acc + new
+		}, func(cur int) int {
+			return cur
 		})
 	}
 	gs.initWG.Done()
 }
 
-func (gs *gSet) startSync(cd time.Duration) {
+func (gs *counter) startSync(cd time.Duration) {
 	if gs.n.NodeIDs() == nil {
 		return
 	}
@@ -58,18 +53,14 @@ func (gs *gSet) startSync(cd time.Duration) {
 
 	go func() {
 		for {
-			els := make([]int, 0)
-			for el := range gs.s[gs.n.ID()].Get() {
-				els = append(els, el)
-			}
+			value := gs.s[gs.n.ID()].Get()
 			for _, dst := range gs.n.NodeIDs() {
 				if dst == gs.n.ID() {
 					continue
 				}
-
 				gs.n.Send(dst, map[string]any{
-					"type":     "sync",
-					"elements": els,
+					"type":  "sync",
+					"value": value,
 				})
 			}
 			time.Sleep(cd)
@@ -77,42 +68,32 @@ func (gs *gSet) startSync(cd time.Duration) {
 	}()
 }
 
-func (gs *gSet) add(element int) {
+func (gs *counter) add(element int) {
 	gs.initWG.Wait()
 	gs.s[gs.n.ID()].Add(element)
 }
 
-func (gs *gSet) read() []int {
+func (gs *counter) read() int {
 	gs.initWG.Wait()
-	set := map[int]struct{}{}
-	ret := make([]int, 0)
+	sum := 0
 
 	for _, acc := range gs.s {
-		for val := range acc.Get() {
-			if _, ok := set[val]; !ok {
-				set[val] = struct{}{}
-				ret = append(ret, val)
-			}
-		}
+		sum += acc.Get()
 	}
 
-	return ret
+	return sum
 }
 
-func (gs *gSet) sync(src string, elements []int) {
-	set := map[int]struct{}{}
-	for _, v := range elements {
-		set[v] = struct{}{}
-	}
-	gs.s[src].Set(set)
+func (gs *counter) sync(src string, element int) {
+	gs.s[src].Set(element)
 }
 
 func main() {
 	n := maelstrom.NewNode()
-	gs := createGSet(n)
+	gs := createCounter(n)
 
 	n.Handle("init", func(msg maelstrom.Message) error {
-		gs.startSync(time.Second * 2)
+		gs.startSync(time.Second * 5)
 		return nil
 	})
 
@@ -123,7 +104,7 @@ func main() {
 			return err
 		}
 
-		gs.add(req.Element)
+		gs.add(req.Delta)
 
 		return n.Reply(msg, map[string]string{
 			"type": "add_ok",
@@ -144,7 +125,7 @@ func main() {
 			return err
 		}
 
-		gs.sync(msg.Src, req.Elements)
+		gs.sync(msg.Src, req.Value)
 		return nil
 	})
 

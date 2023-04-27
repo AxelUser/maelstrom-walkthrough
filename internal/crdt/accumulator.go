@@ -23,11 +23,9 @@ func (acc *Accumulator[T, V]) Add(value V) {
 	acc.mu.Unlock()
 }
 
-func (acc *Accumulator[T, V]) Merge(values []V) {
+func (acc *Accumulator[T, V]) Set(other T) {
 	acc.mu.Lock()
-	for _, v := range values {
-		acc.value = acc.accumulator(acc.value, v)
-	}
+	acc.value = other
 	acc.mu.Unlock()
 }
 

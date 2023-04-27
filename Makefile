@@ -10,3 +10,9 @@ maelstrom_serve:
 
 test_g-set:
 	go build -o ./bin/g-set ./g-set && ./third-party/maelstrom/maelstrom test -w g-set --bin ./bin/g-set --time-limit 30 --rate 10 --nemesis partition
+
+test_g-counter:
+	go build -o ./bin/counter ./counter && ./third-party/maelstrom/maelstrom test -w g-counter --bin ./bin/counter --time-limit 20 --rate 10
+
+test_pn-counter:
+	go build -o ./bin/counter ./counter && ./third-party/maelstrom/maelstrom test -w pn-counter --bin ./bin/counter --time-limit 30 --rate 10 --nemesis partition
