@@ -7,3 +7,6 @@ maelstrom_fetch:
 
 maelstrom_serve:
 	./third-party/maelstrom/maelstrom serve
+
+test_g-set:
+	go build -o ./bin/g-set ./g-set && ./third-party/maelstrom/maelstrom test -w g-set --bin ./bin/g-set --time-limit 30 --rate 10 --nemesis partition
